@@ -203,27 +203,66 @@ class CnInfoDownloader:
         chinese_year = to_chinese_year(year)
 
         if market == "hke":
-            # Hong Kong naming patterns
-            # Check for both Arabic (2023) and Chinese (二零二三) numerals
+            # Hong Kong naming patterns. HK parent reports look like:
+            #   "截至二零二五年十二月三十一日止年度之业绩公布"
+            #   "截至二零二二年十二月三十一日止年度之业绩公布"
+            #   "2022年报"
+            # A-share subsidiary reports mixed in:
+            #   "山东威高骨科材料股份有限公司2022年年度报告"
             has_year = f"{year}" in title or chinese_year in title
             is_annual = (
-                "annual report" in title.lower()
+                "年年度报告" in title
                 or "年度报告" in title
+                or "年度业绩公布" in title
+                or "年度业绩公告" in title
+                or "年度之业绩公布" in title
                 or "年报" in title
                 or f"{year}财务年度报告" in title
+                or f"{year}年年报" in title
             )
             is_summary = (
                 "summary" in title.lower()
+                or "摘要" in title
                 or "摘要" in title
             )
             is_quarterly = (
                 "季度" in title
                 or "半年度" in title
                 or "中期" in title
+                or "可持续性发展报告" in title
+                or "可持续发展报告" in title
             )
             is_english_only = "英文" in title
+            # A-share subsidiary reports listed under same HK orgId
+            # Pattern: full company name + year + 年度报告 (e.g., 山东威高骨科材料股份有限公司2022年年度报告)
+            is_a_share_subsidiary = (
+                "股份有限公司" in title and "年度报告" in title
+                and "年年度报告" in title
+            )
+            # Skip non-report filings
+            is_filing_only = (
+                "向特定对象" in title
+                or "超短" in title
+                or "股东会" in title
+                or "董事会" in title
+                or "发电量" in title
+                or "月报" in title
+                or "月表" in title
+                or "股息" in title
+                or "利润" in title
+                or "承诺" in title
+                or "业绩快报" in title
+            )
 
-            return has_year and is_annual and not is_summary and not is_quarterly and not is_english_only
+            return (
+                has_year
+                and is_annual
+                and not is_summary
+                and not is_quarterly
+                and not is_english_only
+                and not is_a_share_subsidiary
+                and not is_filing_only
+            )
         else:
             # Mainland China naming patterns
             if f"{year}年年度报告" not in title and f"{year}年年报" not in title:
