@@ -14,6 +14,7 @@ import os
 import subprocess
 import json
 import shutil
+import time
 
 
 def check_notebooklm_installed() -> bool:
@@ -21,13 +22,16 @@ def check_notebooklm_installed() -> bool:
     return shutil.which("notebooklm") is not None
 
 
-def run_notebooklm_command(args: list) -> tuple:
+def run_notebooklm_command(args: list, timeout: int = 300) -> tuple:
     """Run notebooklm command and return (success, output)"""
     try:
         result = subprocess.run(
-            ["notebooklm"] + args, capture_output=True, text=True, timeout=120
+            ["notebooklm"] + args, capture_output=True, text=True, timeout=timeout
         )
-        return result.returncode == 0, result.stdout + result.stderr
+        output = result.stdout + result.stderr
+        return result.returncode == 0, output
+    except subprocess.TimeoutExpired:
+        return False, "Command timed out"
     except Exception as e:
         return False, str(e)
 
@@ -68,37 +72,57 @@ def create_notebook(title: str) -> str:
     return output.strip().split()[-1] if output.strip() else None
 
 
-def upload_source(notebook_id: str, file_path: str) -> bool:
-    """Upload a file as source to a notebook"""
+def upload_source(notebook_id: str, file_path: str, max_retries: int = 3) -> bool:
+    """Upload a file as source to a notebook with retry logic"""
     filename = os.path.basename(file_path)
     print(f"📤 Uploading: {filename}")
 
-    # Set notebook context first
-    success, output = run_notebooklm_command(["use", notebook_id])
-    if not success:
-        print(f"❌ Failed to set notebook: {output}", file=sys.stderr)
-        return False
+    for attempt in range(1, max_retries + 1):
+        # Set notebook context first
+        success, output = run_notebooklm_command(["use", notebook_id])
+        if not success:
+            if attempt < max_retries:
+                print(f"   ⚠️ Attempt {attempt}/{max_retries} failed to set notebook, retrying...")
+                time.sleep(3 * attempt)
+                continue
+            print(f"❌ Failed to set notebook: {output}", file=sys.stderr)
+            return False
 
-    # Add source
-    success, output = run_notebooklm_command(["source", "add", file_path])
+        # Add source -- explicitly set --type file for PDFs since auto-detect
+        # only recognizes .txt/.md and treats PDFs as inline text (which fails)
+        cmd = ["source", "add", file_path]
+        if file_path.lower().endswith(".pdf"):
+            cmd.extend(["--type", "file"])
+        success, output = run_notebooklm_command(cmd)
 
-    if success:
-        print(f"   ✅ Uploaded successfully")
-        return True
-    else:
-        print(f"   ❌ Failed: {output}", file=sys.stderr)
-        return False
+        if success:
+            print(f"   ✅ Uploaded successfully")
+            return True
+        else:
+            if attempt < max_retries:
+                wait = 5 * attempt
+                print(f"   ⚠️ Attempt {attempt}/{max_retries} failed, retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                print(f"   ❌ Failed after {max_retries} attempts: {output}", file=sys.stderr)
+                return False
+
+    return False
 
 
 def upload_all_sources(notebook_id: str, files: list) -> dict:
     """Upload multiple files to a notebook"""
     results = {"success": [], "failed": []}
 
-    for file_path in files:
+    for i, file_path in enumerate(files):
         if upload_source(notebook_id, file_path):
             results["success"].append(file_path)
         else:
             results["failed"].append(file_path)
+
+        # Delay between uploads to avoid rate limiting (skip after last file)
+        if i < len(files) - 1:
+            time.sleep(3)
 
     return results
 
